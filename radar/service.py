@@ -13,6 +13,7 @@ from .notifier import WeChatNotifier
 from .llm_evaluator import LLMEvaluator
 from .zhihu_monitor import ZhihuMonitor
 from .x_monitor import XMonitor
+from .command_handler import RadarCommandHandler, is_in_quiet_hours
 
 
 class SocialRadarService:
@@ -34,7 +35,8 @@ class SocialRadarService:
         self.min_value_score = int(rc.get("min_value_score", 70))
         self.base_interval_minutes = int(rc.get("base_interval_minutes", 20))
         self.jitter_ratio = float(rc.get("jitter_ratio", 0.3))
-
+        self.quiet_hours = str(rc.get("quiet_hours", "23:00-09:00"))
+        self.max_days_back = int(rc.get("max_days_back", 7))
         # 2. 初始化微信通知 (1000004)
         wc = self.cfg.get("wechat", {})
         self.notifier = WeChatNotifier(
@@ -77,6 +79,9 @@ class SocialRadarService:
             monitored_users=xc.get("monitored_users", [])
         ))
 
+        # 5. 命令交互与监听服务
+        self.cmd_handler = RadarCommandHandler(self)
+        self._start_command_server(port=8085)
     def send_startup_message(self):
         """发送服务启动与监听范围通知到微信."""
         platforms = [m.get_platform_name() for m in self.monitors]
@@ -84,19 +89,39 @@ class SocialRadarService:
         summary = f"状态: 🟢 运行中 | 监控平台: {', '.join(platforms)}"
 
         details = f"<b>监控重点</b>: 关注人动态 + 关注问题最新回答<br/>" \
-                  f"<b>基础周期</b>: {self.base_interval_minutes} 分钟 (随机抖动 ±{int(self.jitter_ratio*100)}%)<br/>" \
-                  f"<b>推送阈值</b>: ≥ {self.min_value_score} 分 (大模型自动降噪过滤水帖)<br/>" \
-                  f"<b>关注画像</b>: 体系结构、存算一体、CXL、AI加速器、RISC-V<br/>" \
-                  f"<div class=\"highlight\">发现高价值动态将自动推送卡片与核心速读！</div>"
+                  f"<b>抓取范围</b>: 最近 {self.max_days_back} 天<br/>" \
+                  f"<b>免打扰时段</b>: {self.quiet_hours} (夜间静默不打扰)<br/>" \
+                  f"<b>基础周期</b>: 每 {self.base_interval_minutes} 分钟 (随机抖动 ±{int(self.jitter_ratio*100)}%)<br/>" \
+                  f"<b>推送阈值</b>: ≥ {self.min_value_score} 分 (大模型自动降噪)<br/>" \
+                  f"<div class=\"highlight\">💡 <b>微信快捷指令支持</b>:<br/>" \
+                  f"• <code>/check</code> : 立即触发全源检索<br/>" \
+                  f"• <code>/status</code> : 查看当前状态看板<br/>" \
+                  f"• <code>/quiet 23:00-09:00</code> : 设置夜间免打扰<br/>" \
+                  f"• <code>/days 3</code> : 修改回溯抓取天数<br/>" \
+                  f"• <code>/interval 30</code> : 修改轮询周期(分钟)<br/>" \
+                  f"• <code>/score 75</code> : 修改价值推送阈值<br/>" \
+                  f"• <code>/cookie &lt;新Cookie&gt;</code> : 微信热换知乎凭据<br/>" \
+                  f"• <code>/help</code> : 查看完整指令手册</div>"
 
         md_content = f"""### 📡 SocialRadar 社交雷达服务已就绪！
-**状态**: 🟢 正常运行中 (拟人随机长周期轮询)
+**状态**: 🟢 正常运行中 (防反爬拟人抖动)
 **监控平台**: {', '.join(platforms)}
-**轮询策略**: 基础周期 {self.base_interval_minutes} 分钟 (±{int(self.jitter_ratio*100)}% Jitter 动态随机)
-**价值阈值**: 🔥 **{self.min_value_score} 分** 及以上推送 (自动过滤水帖段子)
+**抓取范围**: 最近 **{self.max_days_back}** 天内的动态/回答
+**免打扰时段**: `{self.quiet_hours}` (夜间静默不推送)
+**轮询策略**: 基础周期 {self.base_interval_minutes} 分钟 (±{int(self.jitter_ratio*100)}% 随机抖动)
+**价值阈值**: 🔥 **{self.min_value_score} 分** 及以上推送
 **大模型**: {self.cfg['llm']['model']}
 
-> 💡 **防封机制**: 每次轮询间隔随机浮动在 14~26 分钟，各请求之间随机延迟 2~6 秒，严防高频反爬封号！"""
+> 💡 **微信快捷指令支持**：在此对话框回复以下命令可实时调参：
+> - `/check` 或 `查动态`：立即触发一次全源检索
+> - `/status` 或 `状态`：查看当前配置看板
+> - `/quiet 23:00-09:00`：设置夜间免打扰休眠时段
+> - `/quiet off`：关闭免打扰时段
+> - `/days <天数>`：动态调整回溯天数 (如 `/days 3`)
+> - `/interval <分钟>`：动态调整轮询周期 (如 `/interval 30`)
+> - `/score <分数>`：动态调整价值推送阈值 (如 `/score 75`)
+> - `/cookie <新Cookie>`：免登录服务器直接热更知乎 Cookie！
+> - `/help`：获取完整指令手册"""
 
         self.notifier.send_dual_notification(
             title=title,
@@ -121,20 +146,23 @@ class SocialRadarService:
 
         notified = False
         if res.need_notify:
-            tags_str = " ".join([f"`{t}`" for t in res.tags]) if res.tags else ""
-            btn_text = "查看知乎回答" if item.platform == "zhihu" else "查看原文"
+            if is_in_quiet_hours(self.quiet_hours):
+                logger.info(f"[{item.platform}] 当前处于夜间免打扰时段 ({self.quiet_hours})，静默记录不推送: {item.title[:30]}")
+            else:
+                tags_str = " ".join([f"`{t}`" for t in res.tags]) if res.tags else ""
+                btn_text = "查看知乎回答" if item.platform == "zhihu" else "查看原文"
 
-            # 1. 微信原生卡片内容
-            title = f"📡 发现高价值内容({res.value_score}分)"
-            summary = f"平台: {item.platform.upper()} | 动态: {item.action}"
-            details = f"<b>📌 议题</b>: {item.title}<br/>" \
-                      f"<b>👤 答主</b>: {item.author} (👍 {item.upvotes})<br/>" \
-                      f"<b>💡 核心见解</b>: {res.core_insight}<br/>" \
-                      f"<b>🎯 推荐理由</b>: {res.value_reason}<br/>" \
-                      f"<div class=\"gray\">标签: {' '.join(res.tags)}</div>"
+                # 1. 微信原生卡片内容
+                title = f"📡 发现高价值内容({res.value_score}分)"
+                summary = f"平台: {item.platform.upper()} | 动态: {item.action}"
+                details = f"<b>📌 议题</b>: {item.title}<br/>" \
+                          f"<b>👤 答主</b>: {item.author} (👍 {item.upvotes})<br/>" \
+                          f"<b>💡 核心见解</b>: {res.core_insight}<br/>" \
+                          f"<b>🎯 推荐理由</b>: {res.value_reason}<br/>" \
+                          f"<div class=\"gray\">标签: {' '.join(res.tags)}</div>"
 
-            # 2. 企微 Markdown 富文本内容
-            md_content = f"""### 📡 发现高价值动态推荐
+                # 2. 企微 Markdown 富文本内容
+                md_content = f"""### 📡 发现高价值动态推荐
 **议题**: [{item.title}]({item.url})
 **动态**: {item.action} | **答主**: {item.author} (👍 **{item.upvotes}** 赞同)
 **价值得分**: 🔥 **{res.value_score} 分** {tags_str}
@@ -143,14 +171,14 @@ class SocialRadarService:
 
 [🔗 点击打开知乎查阅详情]({item.url})"""
 
-            notified = self.notifier.send_dual_notification(
-                title=title,
-                summary=summary,
-                details=details,
-                markdown_content=md_content,
-                url=item.url,
-                btntxt=btn_text
-            )
+                notified = self.notifier.send_dual_notification(
+                    title=title,
+                    summary=summary,
+                    details=details,
+                    markdown_content=md_content,
+                    url=item.url,
+                    btntxt=btn_text
+                )
 
         # 记录入库去重
         self.storage.record_item(
@@ -176,7 +204,76 @@ class SocialRadarService:
                     self.process_item(it)
             except Exception as e:
                 logger.error(f"[{p_name}] 抓取异常: {e}")
+    def _start_command_server(self, port: int = 8085):
+        """本地轻量 HTTP 端口接收来自微信回调网关的指令并执行."""
+        import threading, json
+        from urllib.parse import urlparse, parse_qs
+        from http.server import HTTPServer, BaseHTTPRequestHandler
 
+        service_ref = self
+
+        class CmdHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                parsed = urlparse(self.path)
+                params = parse_qs(parsed.query)
+                cmd_text = params.get("cmd", [""])[0]
+                if cmd_text:
+                    reply = service_ref.cmd_handler.handle_command(cmd_text)
+                    service_ref.notifier.send_dual_notification(
+                        title="⚙️ 社交雷达指令结果",
+                        summary="指令交互调参",
+                        details=reply.replace("\n", "<br/>"),
+                        markdown_content=reply,
+                        url="https://www.zhihu.com/follow",
+                        btntxt="查看知乎"
+                    )
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/plain; charset=utf-8")
+                    self.end_headers()
+                    self.wfile.write(reply.encode("utf-8"))
+                else:
+                    self.send_response(200)
+                    self.end_headers()
+                    self.wfile.write(b"SocialRadar Command Server Running")
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(length).decode("utf-8", errors="replace")
+                try:
+                    data = json.loads(body)
+                    cmd_text = data.get("command", "")
+                    from_user = data.get("from_user", "@all")
+                    reply = service_ref.cmd_handler.handle_command(cmd_text, from_user)
+                    service_ref.notifier.send_dual_notification(
+                        title="⚙️ 社交雷达指令结果",
+                        summary="来自微信指令交互",
+                        details=reply.replace("\n", "<br/>"),
+                        markdown_content=reply,
+                        url="https://www.zhihu.com/follow",
+                        btntxt="查看知乎"
+                    )
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"code": 0, "reply": reply}, ensure_ascii=False).encode("utf-8"))
+                except Exception as e:
+                    self.send_response(500)
+                    self.end_headers()
+                    self.wfile.write(str(e).encode("utf-8"))
+
+            def log_message(self, format, *args):
+                pass
+
+        def run_server():
+            try:
+                httpd = HTTPServer(("127.0.0.1", port), CmdHandler)
+                logger.info(f"[Command] 社交雷达本地指令交互服务就绪: http://127.0.0.1:{port}")
+                httpd.serve_forever()
+            except Exception as e:
+                logger.debug(f"[Command] 指令端口异常: {e}")
+
+        t = threading.Thread(target=run_server, daemon=True)
+        t.start()
     def run_forever(self):
         """主守护循环：长周期 + 拟人随机 Jitter 抖动，严密防范风控."""
         self.send_startup_message()
