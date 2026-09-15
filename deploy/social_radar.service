@@ -1,0 +1,15 @@
+[Unit]
+Description=SocialRadar - AI Social Dynamics & High-Value Content Radar
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/social_radar
+ExecStart=/root/mail_assist/venv/bin/python run.py
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

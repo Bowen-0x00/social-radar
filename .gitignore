@@ -1,0 +1,26 @@
+# Configuration with sensitive credentials
+config/config.yaml
+*.pem
+*.key
+
+# Data & Databases
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Python Caches & Environments
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+venv/
+env/
+ENV/
+
+# IDE & OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db

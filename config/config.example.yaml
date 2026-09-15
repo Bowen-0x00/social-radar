@@ -1,0 +1,41 @@
+# SocialRadar 配置文件模板 (请复制为 config/config.yaml 并填入您的真实凭据)
+
+# 1. 企业微信通知配置 (自建应用 1000004)
+wechat:
+  corp_id: "YOUR_CORP_ID"
+  agent_id: 1000004
+  corp_secret: "YOUR_CORP_SECRET"
+  to_user: "@all"
+
+# 2. 知乎平台监控配置
+zhihu:
+  enabled: true
+  user_token: "YOUR_ZHIHU_URL_TOKEN"       # 个人主页 url_token (如 https://www.zhihu.com/people/xxx 中的 xxx)
+  check_moments: true                      # 监听我关注的人的动态 (赞同、回答、发文)
+  check_questions: true                    # 监听我关注的问题的最新回答
+  max_questions_per_round: 8              # 每次轮询检查的前 N 个问题 (防过度请求)
+  request_delay_range: [2.5, 6.0]         # 每次网络请求之间的随机延迟秒数 (防反爬)
+  cookie: "YOUR_ZHIHU_COOKIE_STRING"      # 浏览器登录后的完整 Cookie
+
+# 3. X (Twitter) 平台监控配置 (架构预留，后续账号就绪后开启)
+x_twitter:
+  enabled: false                           # 准备好账号后改为 true
+  bearer_token: "YOUR_TWITTER_BEARER_TOKEN"
+  monitored_users: []                      # 监控的目标推特用户名列表
+
+# 4. 大语言模型 (LLM) 价值评估配置 (兼容 OpenAI 规范，如 DeepSeek、Gemini、OpenAI 等)
+llm:
+  enable: true
+  base_url: "https://api.deepseek.com/v1"
+  api_key: "YOUR_LLM_API_KEY"             # 请填入您的大模型 API Key
+  model: "deepseek-chat"                  # 模型名称
+  temperature: 0.2
+  proxy: null                             # 访问海外大模型接口时的代理端口 (如 http://127.0.0.1:18889)
+
+# 5. 雷达监控调度与防封参数
+radar:
+  db_path: "data/social_radar.db"
+  min_value_score: 70                      # 价值评分推送阈值 (0-100分，高于此分才推送到微信)
+  base_interval_minutes: 20                # 基础轮询周期：20 分钟
+  jitter_ratio: 0.3                        # 随机抖动比例 (±30%，实际每次睡眠 14~26 分钟，极其拟人化)
+  max_days_back: 7                         # 仅处理最近 N 天内的动态/回答

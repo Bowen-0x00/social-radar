@@ -1,0 +1,48 @@
+# 用户价值关注画像 (用于知乎动态与回答的价值评估与智能降噪)
+
+# 1. 核心高价值关注领域
+target_topics:
+  - "计算机体系结构 (Computer Architecture) 与四大顶会 (ISCA, MICRO, HPCA, ASPLOS)"
+  - "近存计算、存算一体 (PIM / PNM / CIM) 的前景、落地瓶颈与真实工业实践"
+  - "CXL 协议、CXL.mem、解耦内存架构 (Disaggregated Memory)"
+  - "AI 加速器芯片架构、大模型硬件加速器 (NPU, TPU, GPU架构, DSA)"
+  - "AI 编译器 (TVM, MLIR, Triton, XLA, 算子融合与图优化)"
+  - "RISC-V 处理器架构、开源指令集、向量扩展 (RVV)"
+  - "芯片设计与 EDA 工具链 (逻辑综合、物理设计、形式验证)"
+  - "算法与系统 I/O 复杂度、访存墙 (Memory Wall) 与 Roofline 模型"
+  - "Chiplet 芯粒、UCIe、先进封装与 Die-to-Die 互连"
+
+# 2. 强相关关键词 (优先判定高价值)
+keywords:
+  - "存算一体"
+  - "近存计算"
+  - "PIM"
+  - "CXL"
+  - "体系结构"
+  - "AI加速器"
+  - "RISC-V"
+  - "RVV"
+  - "EDA"
+  - "Chiplet"
+  - "UCIe"
+  - "HBM"
+  - "访存带宽"
+  - "I/O复杂度"
+  - "Roofline"
+  - "Triton"
+  - "MLIR"
+  - "TVM"
+  - "KV Cache"
+
+# 3. 严格降噪/低价值过滤规则 (大模型直接评为低分，绝不打扰)
+exclude_patterns:
+  - "娱乐八卦、影视同人、饭圈明星"
+  - "无建设性的情绪发泄、男女对立、纯网络撕逼"
+  - "浅层段子、无技术营养的玩梗灌水"
+  - "金融股市短线投机与虚拟货币炒作"
+  - "日常情感碎碎念、生活吐槽"
+
+# 4. 价值评估标准偏好
+preferences:
+  reward_in_depth_insights: true      # 偏好深度长文、有真实一线工业落地经验的剖析
+  reward_architectural_tradeoffs: true # 偏好深入探讨架构权衡 (Trade-off)、PPA、成本瓶颈的内容
