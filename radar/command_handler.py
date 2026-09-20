@@ -48,6 +48,11 @@ class RadarCommandHandler:
         if cmd.lower() in ("/status", "status", "状态", "/s"):
             return self._cmd_status()
         # 3. 立即触发一轮检索
+        # 2.5 AI 深度追问: /llm <问题> 或 /llm last <问题> 或 /llm history
+        if cmd.lower().startswith(("/llm", "／llm")):
+            llm_text = cmd[4:].strip() if len(cmd) > 4 else ""
+            return self._cmd_chat_llm(llm_text, from_user)
+
         if cmd.lower() in ("/check", "check", "/run", "run", "查动态", "立即检查"):
             return self._cmd_check()
 
@@ -126,6 +131,114 @@ class RadarCommandHandler:
 🤖 **大模型**: {cfg.get('llm', {}).get('model', 'gemini-3.8-flash')}
 🔍 **监控源**: 知乎 (关注人动态 + 关注问题最新回答)
 💬 **AI追问提示**: 发送 `/llm <问题>` 即可针对最新文章展开多轮深度探讨！"""
+    def _cmd_chat_llm(self, llm_text: str, from_user: str) -> str:
+        """处理针对社交雷达文章的 /llm 追问."""
+        parts = llm_text.split(maxsplit=1)
+        if not parts:
+            return (
+                "💡 **SocialRadar AI 深度追问指南**\n"
+                "━━━━━━━━━━━━━━━━━━\n"
+                "• `/llm <问题>`: 对雷达最新捕获并推送的动态/文章展开深度提问\n"
+                "• `/llm last <问题>`: 追问最新一条动态\n"
+                "• `/llm <ID> <问题>`: 追问指定动态\n"
+                "• `/llm history`: 查看最新动态的概况与已有追问历史"
+            )
+
+        first_token = parts[0].strip().lower()
+        if first_token in ("last", "latest") or (first_token.isalnum() and len(first_token) >= 8 and not any('\u4e00' <= c <= '\u9fff' for c in first_token)) or first_token.isdigit():
+            target = first_token
+            question = parts[1].strip() if len(parts) > 1 else ""
+        else:
+            target = "last"
+            question = llm_text
+
+        # 查找条目
+        with self.service.storage._get_connection() as conn:
+            row = None
+            if target in ("last", "latest"):
+                cur = conn.execute("SELECT * FROM processed_items WHERE is_notified = 1 ORDER BY created_at DESC LIMIT 1")
+                row = cur.fetchone()
+                if not row:
+                    cur = conn.execute("SELECT * FROM processed_items ORDER BY created_at DESC LIMIT 1")
+                    row = cur.fetchone()
+            else:
+                cur = conn.execute("SELECT * FROM processed_items WHERE item_id = ? OR title LIKE ? ORDER BY created_at DESC LIMIT 1", (target, f"%{target}%"))
+                row = cur.fetchone()
+
+        if not row:
+            return f"❌ 未在雷达库中找到相关动态 (查询目标: `{target}`)。\n请确认是否有已推送的动态，或发送 `/check` 立即检索一次！"
+
+        item = dict(row)
+        item_id = item["item_id"]
+        title = item.get("title", "无标题动态")
+        author = item.get("author", "未知作者")
+        score = item.get("value_score", 0)
+        core_insight = item.get("core_insight", "")
+
+        # 查看概况
+        if not question or question.lower() == "history":
+            hist = self.service.storage.get_chat_history(item_id) if hasattr(self.service.storage, "get_chat_history") else []
+            return (
+                f"📡 **当前选中雷达动态**\n"
+                f"📌 《{title}》\n"
+                f"👤 作者: {author} | 🔥 价值评分: {score}分\n"
+                f"💡 核心洞察: {core_insight}\n\n"
+                f"💬 已有追问历史: {len(hist)} 条消息。\n"
+                f"您可以发送：`/llm 您的追问问题` 与 AI 继续探讨！"
+            )
+
+        # 调用大模型执行对话
+        hist = self.service.storage.get_chat_history(item_id) if hasattr(self.service.storage, "get_chat_history") else []
+        context_parts = [
+            f"【动态/文章标题】: {title}",
+            f"【作者】: {author}",
+            f"【来源平台】: {item.get('platform', '')}",
+            f"【原文链接】: {item.get('url', '')}",
+            f"【AI价值评分】: {score}分",
+            f"【前期核心洞察与分析】:\n{core_insight}"
+        ]
+        doc_context = "\n".join(context_parts)
+        system_prompt = f"""你是一位敏锐的社交舆情与前沿技术观察助手。
+请基于以下由【SocialRadar】监控并分析的内容，回答用户的追问。
+
+--- 内容与洞察上下文 ---
+{doc_context}
+--- 结束 ---
+
+回答要求：
+1. 严格依据上述内容与洞察作答，深入剖析舆论热点或技术观点。
+2. 语言条理清晰，层次分明，逻辑严密，适合企业微信或手机端阅读。
+3. 控制在 500 字以内，避免冗长废话，突出要点。"""
+
+        messages = [{"role": "system", "content": system_prompt}]
+        for h in hist[-6:]:
+            r = h.get("role", "user")
+            c = h.get("content", "")
+            if r in ("user", "assistant") and c:
+                messages.append({"role": r, "content": c})
+        messages.append({"role": "user", "content": question})
+
+        client = self.service.evaluator.client
+        model = self.service.evaluator.model
+        try:
+            resp = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=0.3,
+                max_tokens=800
+            )
+            ans = resp.choices[0].message.content.strip()
+            if hasattr(self.service.storage, "add_chat_message"):
+                self.service.storage.add_chat_message(item_id, from_user, "user", question)
+                self.service.storage.add_chat_message(item_id, from_user, "assistant", ans)
+            return (
+                f"🤖 **【SocialRadar·深度探讨】**\n"
+                f"📄 《{title}》\n"
+                f"❓ 问: {question}\n\n"
+                f"💡 答:\n{ans}"
+            )
+        except Exception as e:
+            return f"⚠️ 追问回答生成失败: {e}"
     def _cmd_check(self) -> str:
         import threading
         threading.Thread(target=self.service.poll_all_monitors, daemon=True).start()

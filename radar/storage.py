@@ -38,9 +38,20 @@ class RadarStorage:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """)
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS radar_chat_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                item_id TEXT NOT NULL,
+                from_user TEXT,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """)
             cur.execute("CREATE INDEX IF NOT EXISTS idx_radar_platform ON processed_items(platform)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_radar_score ON processed_items(value_score)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_radar_created ON processed_items(created_at)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_radar_chat_id ON radar_chat_history(item_id)")
             conn.commit()
             logger.debug(f"[Storage] SQLite 数据库就绪: {self.db_path}")
 
@@ -85,3 +96,24 @@ class RadarStorage:
                 datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             ))
             conn.commit()
+    def add_chat_message(self, item_id: str, from_user: str, role: str, content: str):
+        """记录动态追问历史."""
+        with self._get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("""
+            INSERT INTO radar_chat_history (item_id, from_user, role, content)
+            VALUES (?, ?, ?, ?)
+            """, (item_id, from_user, role, content))
+            conn.commit()
+
+    def get_chat_history(self, item_id: str, limit: int = 6) -> List[Dict[str, str]]:
+        """获取指定动态的追问历史."""
+        with self._get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("""
+            SELECT role, content FROM radar_chat_history
+            WHERE item_id = ?
+            ORDER BY id ASC
+            LIMIT ?
+            """, (item_id, limit))
+            return [{"role": r["role"], "content": r["content"]} for r in cur.fetchall()]
