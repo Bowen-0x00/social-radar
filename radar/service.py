@@ -152,24 +152,30 @@ class SocialRadarService:
                 tags_str = " ".join([f"`{t}`" for t in res.tags]) if res.tags else ""
                 btn_text = "查看知乎回答" if item.platform == "zhihu" else "查看原文"
 
+                # 取 item_id 简短标识（如知乎回答 ID 或哈希）
+                item_ref = item.item_id.split("_")[-1] if "_" in item.item_id else item.item_id[:12]
+
                 # 1. 微信原生卡片内容
-                title = f"📡 发现高价值内容({res.value_score}分)"
+                title = f"📡 发现高价值内容({res.value_score}分) [ID:{item_ref}]"
                 summary = f"平台: {item.platform.upper()} | 动态: {item.action}"
                 details = f"<b>📌 议题</b>: {item.title}<br/>" \
                           f"<b>👤 答主</b>: {item.author} (👍 {item.upvotes})<br/>" \
                           f"<b>💡 核心见解</b>: {res.core_insight}<br/>" \
                           f"<b>🎯 推荐理由</b>: {res.value_reason}<br/>" \
-                          f"<div class=\"gray\">标签: {' '.join(res.tags)}</div>"
+                          f"<div class=\"gray\">标签: {' '.join(res.tags)}</div>" \
+                          f"<div class=\"gray\">💬 追问提示: 回复 /llm {item_ref} 您的提问 或 /llm 提问</div>"
 
                 # 2. 企微 Markdown 富文本内容
-                md_content = f"""### 📡 发现高价值动态推荐
+                md_content = f"""### 📡 发现高价值动态推荐 [ID: {item_ref}]
 **议题**: [{item.title}]({item.url})
 **动态**: {item.action} | **答主**: {item.author} (👍 **{item.upvotes}** 赞同)
 **价值得分**: 🔥 **{res.value_score} 分** {tags_str}
 > **💡 核心见解**: {res.core_insight}
 > **🎯 推荐理由**: {res.value_reason}
 
-[🔗 点击打开知乎查阅详情]({item.url})"""
+[🔗 点击打开知乎查阅详情]({item.url})
+
+💬 追问提示: 回复 `/llm {item_ref} 您的提问` 或 `/llm 您的提问` 展开深度探讨"""
 
                 notified = self.notifier.send_dual_notification(
                     title=title,
