@@ -45,9 +45,8 @@ class RadarCommandHandler:
             return self._cmd_help()
 
         # 2. 状态看板 (免打扰、回溯天数、轮询频率三元组)
-        if cmd.lower() in ("/status", "status", "状态"):
+        if cmd.lower() in ("/status", "status", "状态", "/s"):
             return self._cmd_status()
-
         # 3. 立即触发一轮检索
         if cmd.lower() in ("/check", "check", "/run", "run", "查动态", "立即检查"):
             return self._cmd_check()
@@ -89,23 +88,27 @@ class RadarCommandHandler:
     def _cmd_help(self) -> str:
         return """📖 **SocialRadar 社交雷达控制手册**
 ━━━━━━━━━━━━━━━━━━
+🔹 **AI 深度追问与多轮对话**:
+• `/llm <问题>`: 对雷达最新推送的动态/文章展开深度提问
+• `/llm last <问题>`: 追问最新一条动态
+• `/llm <ID> <问题>`: 追问指定 ID 内容 (如 `/llm 12 ...`)
+• `/llm history`: 查看最新动态的概况与已有追问历史
+
 🔹 **服务操作**:
-- `/check` 或 `查动态`: 立即触发一次全源检索与 AI 评估
-- `/status` 或 `状态`: 查看当前运行状态、免打扰与各参数
+• `/check` 或 `查动态`: 立即触发一次全源检索与 AI 评估
+• `/status` 或 `状态`: 查看当前运行状态、免打扰与各参数
 
 🔹 **免打扰休眠设置 (夜间不打扰)**:
-- `/quiet 23:00-09:00`: 设置夜间休眠时段 (在此期间静默不推送)
-- `/quiet off`: 关闭免打扰，恢复全天候推送
+• `/quiet 23:00-09:00`: 设置夜间休眠时段 (在此期间静默不推送)
+• `/quiet off`: 关闭免打扰，恢复全天候推送
 
 🔹 **回溯天数与频率调参**:
-- `/days <天数>`: 设置抓取过去几天的动态 (如 `/days 3` 或 `/days 7`)
-- `/interval <分钟>`: 设置轮询检查周期 (如 `/interval 30`)
-- `/score <分数>`: 设置 AI 价值推送阈值 (默认 70 分)
+• `/days <天数>`: 设置抓取过去几天的动态 (如 `/days 3` 或 `/days 7`)
+• `/interval <分钟>`: 设置轮询检查周期 (如 `/interval 30`)
+• `/score <分数>`: 设置 AI 价值推送阈值 (默认 70 分)
 
 🔹 **爬虫维护**:
-- `/cookie <新Cookie>`: 微信直接热换知乎 Cookie，免登服务器！
-
-💡 直接在微信对话框回复以上命令即可实时生效！"""
+• `/cookie <新Cookie>`: 微信直接热换知乎 Cookie，免登服务器！"""
 
     def _cmd_status(self) -> str:
         cfg = self.service.cfg
@@ -121,8 +124,8 @@ class RadarCommandHandler:
 ⏰ **基础轮询周期**: 每 **{self.service.base_interval_minutes}** 分钟 (±{int(self.service.jitter_ratio*100)}% 随机抖动)
 🎯 **AI 价值阈值**: {self.service.min_value_score} 分及以上推送
 🤖 **大模型**: {cfg.get('llm', {}).get('model', 'gemini-3.8-flash')}
-🔍 **监控源**: 知乎 (关注人动态 + 关注问题最新回答)"""
-
+🔍 **监控源**: 知乎 (关注人动态 + 关注问题最新回答)
+💬 **AI追问提示**: 发送 `/llm <问题>` 即可针对最新文章展开多轮深度探讨！"""
     def _cmd_check(self) -> str:
         import threading
         threading.Thread(target=self.service.poll_all_monitors, daemon=True).start()
