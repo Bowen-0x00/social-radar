@@ -62,6 +62,23 @@ It actively monitors **followed user dynamics and new answers to followed questi
                  └────────────────────────────────┘
 ```
 
+
+### 💬 Interactive WeChat Commands
+
+| Command | Alias | Description | Example |
+| :--- | :--- | :--- | :--- |
+| **`/status`** | `状态` | **Live probe** of LLM connectivity & Zhihu Cookie health | `/status` |
+| **`/llm model`** | `模型` | View active LLM model and recommended candidates | `/llm model` |
+| **`/llm model <Name>`**| - | **Hot-switch active model** with pre-flight connection test | `/llm model gemini-3.1-pro-preview` |
+| **`/llm <question>`** | - | Multi-turn conversational follow-up on latest post | `/llm How does this compare to CXL?` |
+| **`/cookie <Cookie>`** | `更新知乎` | **Hot-update Zhihu cookie** directly from WeChat chat | `/cookie _xsrf=...` |
+| **`/check`** | `查动态` | Trigger an immediate monitoring and evaluation round | `/check` |
+| **`/quiet 23:00-09:00`**| `休眠` | Set quiet hours window (suppresses notifications) | `/quiet 23:00-09:00` |
+| **`/days <N>`** | `范围` | Adjust lookback scope (default 7 days) | `/days 3` |
+| **`/interval <min>`** | `频率` | Dynamically adjust base polling interval (default 20 min) | `/interval 30` |
+| **`/score <N>`** | `阈值` | Adjust AI value threshold (default 70) | `/score 75` |
+| **`/help`** | `帮助` | Display interactive command manual | `/help` |
+
 ---
 
 ## 🚀 Getting Started
