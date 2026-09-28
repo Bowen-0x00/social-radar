@@ -2,6 +2,8 @@
 
 import pytest
 import os
+import sys
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from radar.models import SocialItem, EvaluationResult
 from radar.storage import RadarStorage
 from radar.llm_evaluator import LLMEvaluator
@@ -83,3 +85,51 @@ def test_heuristic_evaluator_noise():
     res = evaluator.evaluate(noise_item)
     assert res.value_score < 70
     assert not res.need_notify
+
+
+def test_model_switching_and_status(tmp_path):
+    """测试 /llm model 查看状态与模型切换分支."""
+    from radar.command_handler import RadarCommandHandler
+
+    class MockEvaluator:
+        enable = True
+        model = "gemini-3.8-flash"
+        base_url = "https://mock.api/v1"
+        min_value_score = 70
+        def test_model(self, m):
+            if m == "good-model":
+                return True, "0.3s"
+            return False, "503 No Channel"
+
+    class MockService:
+        cfg = {"radar": {"quiet_hours": "off"}, "zhihu": {"cookie": ""}, "llm": {"model": "gemini-3.8-flash"}}
+        max_days_back = 7
+        base_interval_minutes = 20
+        jitter_ratio = 0.3
+        min_value_score = 70
+        evaluator = MockEvaluator()
+        storage = RadarStorage(str(tmp_path / "mock.db"))
+        monitors = []
+
+    handler = RadarCommandHandler.__new__(RadarCommandHandler)
+    handler.service = MockService()
+    handler._update_yaml = lambda k, v: None
+
+    # 1. /llm model 查看状态
+    res_view = handler.handle_command("/llm model")
+    assert "SocialRadar 大模型状态看板" in res_view
+
+    # 2. /llm model bad-model 切换失败
+    res_bad = handler.handle_command("/llm model bad-model")
+    assert "模型连通性测试失败" in res_bad
+    assert handler.service.evaluator.model == "gemini-3.8-flash"
+
+    # 3. /llm model good-model 切换成功
+    res_good = handler.handle_command("/llm model good-model")
+    assert "大模型切换成功" in res_good
+    assert handler.service.evaluator.model == "good-model"
+
+    # 4. /status 状态探测
+    res_status = handler.handle_command("/status")
+    assert "SocialRadar 当前运行状态看板" in res_status
+    assert "good-model" in res_status

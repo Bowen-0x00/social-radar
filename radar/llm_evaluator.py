@@ -31,17 +31,98 @@ class LLMEvaluator:
         self.min_value_score = min_value_score
         self.profile = self._load_profile(profile_path)
 
+        self.base_url = base_url
+        self.api_key = api_key
+        self.proxy = proxy
         self.client: Optional[OpenAI] = None
+        self.direct_client: Optional[OpenAI] = None
+        self.last_error: Optional[str] = None
+
         if self.enable:
-            http_client = httpx.Client(timeout=45.0, proxy=proxy) if proxy else httpx.Client(timeout=45.0)
+            http_client = httpx.Client(timeout=35.0, proxy=proxy) if proxy else httpx.Client(timeout=35.0)
             self.client = OpenAI(
                 base_url=base_url,
                 api_key=api_key,
                 http_client=http_client
             )
-            logger.info(f"[Evaluator] LLM 价值评估引擎就绪 (模型: {model}, 代理: {proxy or '直连'})")
+            if proxy:
+                self.direct_client = OpenAI(
+                    base_url=base_url,
+                    api_key=api_key,
+                    http_client=httpx.Client(timeout=35.0)
+                )
+            else:
+                self.direct_client = self.client
+            logger.info(f"[Evaluator] LLM 价值评估引擎就绪 (首选模型: {model}, 代理: {proxy or '直连'})")
         else:
             logger.warning("[Evaluator] LLM 引擎停用或未配置 API Key，将采用规则降级评估")
+
+    def _call_chat_completions(self, messages: List[Dict[str, str]], response_format: Optional[Dict[str, str]] = None) -> str:
+        """调用大模型，具备自动多候选模型故障转移与代理连接故障自愈能力."""
+        candidate_models = [self.model, "gemini-3.1-pro-preview", "gemini-3.6-flash", "gemini-3.8-flash", "deepseek-chat"]
+        seen = set()
+        ordered_models = []
+        for m in candidate_models:
+            if m and m not in seen:
+                seen.add(m)
+                ordered_models.append(m)
+
+        clients = [self.client]
+        if self.direct_client and self.direct_client is not self.client:
+            clients.append(self.direct_client)
+
+        last_error = None
+        for cli in clients:
+            for m in ordered_models:
+                try:
+                    kwargs = {
+                        "model": m,
+                        "messages": messages,
+                        "temperature": self.temperature,
+                    }
+                    if response_format:
+                        kwargs["response_format"] = response_format
+                    resp = cli.chat.completions.create(**kwargs)
+                    content = resp.choices[0].message.content or ""
+                    if content.strip():
+                        if m != self.model:
+                            logger.info(f"[Evaluator] 主模型 [{self.model}] 异常，成功故障转移至候选模型 [{m}]")
+                        return content
+                except Exception as e:
+                    last_error = e
+                    logger.debug(f"[Evaluator] 候选模型 [{m}] 评估失败: {e}")
+                    continue
+
+        raise last_error or RuntimeError("所有大模型通道均不可用")
+
+    def test_model(self, model_name: str) -> tuple[bool, str]:
+        """测试指定模型的连通性与时延."""
+        if not self.enable:
+            return False, "LLM 未启用或未配置 API Key"
+
+        import time
+        start_time = time.time()
+        clients = [self.client]
+        if self.direct_client and self.direct_client is not self.client:
+            clients.append(self.direct_client)
+
+        last_err = ""
+        for cli in clients:
+            try:
+                resp = cli.chat.completions.create(
+                    model=model_name,
+                    messages=[{"role": "user", "content": "hi"}],
+                    max_tokens=5,
+                    timeout=8.0
+                )
+                cost = time.time() - start_time
+                if resp.choices and resp.choices[0].message:
+                    return True, f"{cost:.2f}s"
+            except Exception as e:
+                last_err = str(e)
+                continue
+
+        return False, last_err[:120]
 
     def _load_profile(self, path: str) -> Dict[str, Any]:
         try:
@@ -102,16 +183,18 @@ class LLMEvaluator:
 {item.content_snippet[:3500]}"""
 
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
+            raw = self._call_chat_completions(
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                temperature=self.temperature,
                 response_format={"type": "json_object"}
             )
-            raw = response.choices[0].message.content or "{}"
+            self.last_error = None
+        except Exception as e:
+            self.last_error = str(e)
+            logger.error(f"[Evaluator] 大模型评估异常: {e}")
+            return None
             data = self._parse_json(raw)
 
             score = int(data.get("value_score", 40))

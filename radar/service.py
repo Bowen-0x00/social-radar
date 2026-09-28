@@ -69,7 +69,8 @@ class SocialRadarService:
                 check_moments=bool(zc.get("check_moments", True)),
                 check_questions=bool(zc.get("check_questions", True)),
                 max_questions_per_round=int(zc.get("max_questions_per_round", 8)),
-                delay_range=tuple(zc.get("request_delay_range", [2.5, 6.0]))
+                delay_range=tuple(zc.get("request_delay_range", [2.5, 6.0])),
+                notifier=self.notifier
             ))
 
         xc = self.cfg.get("x_twitter", {})
@@ -143,6 +144,19 @@ class SocialRadarService:
         # LLM 价值深度评估
         res: EvaluationResult = self.evaluator.evaluate(item)
         logger.info(f"[{item.platform}] 评估结果: 价值得分={res.value_score} (阈值: {self.min_value_score}), 噪音={res.is_noise}, 需推送={res.need_notify}")
+        # 检查是否发生大模型评估异常并告警
+        if getattr(self.evaluator, "last_error", None):
+            self.notifier.send_alert(
+                alert_key="social_radar_llm_alert",
+                title="⚠️ 【社交雷达 - 大模型评估告警】",
+                content=(
+                    f"🤖 当前主模型: `{self.evaluator.model}`\n"
+                    f"❌ 错误详情: {self.evaluator.last_error}\n\n"
+                    "📌 处理: 本轮已自动降级为规则启发式评分。\n"
+                    "💡 建议: 在微信回复 `/llm model` 检查模型连通性，或回复 `/llm model <新模型>` 切换可用模型！"
+                )
+            )
+
 
         notified = False
         if res.need_notify:

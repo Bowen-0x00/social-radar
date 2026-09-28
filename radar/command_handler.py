@@ -98,7 +98,8 @@ class RadarCommandHandler:
 • `/llm last <问题>`: 追问最新一条动态
 • `/llm <ID> <问题>`: 追问指定 ID 内容 (如 `/llm 12 ...`)
 • `/llm history`: 查看最新动态的概况与已有追问历史
-
+• `/llm model`: 查看大模型连接状态与推荐模型列表
+• `/llm model <模型名称>`: 切换当前大模型 (如 `/llm model gemini-3.1-pro-preview`)
 🔹 **服务操作**:
 • `/check` 或 `查动态`: 立即触发一次全源检索与 AI 评估
 • `/status` 或 `状态`: 查看当前运行状态、免打扰与各参数
@@ -121,16 +122,45 @@ class RadarCommandHandler:
         quiet_h = rc.get("quiet_hours", "23:00-09:00")
         quiet_desc = "休眠静默中 🌙" if is_in_quiet_hours(quiet_h) else "活跃监控中 🟢"
 
-        return f"""📊 **SocialRadar 当前运行状态**
+        # 1. 实时探测大模型健康状态
+        llm_model = self.service.evaluator.model
+        llm_ok, llm_cost = self.service.evaluator.test_model(llm_model)
+        llm_badge = f"🟢 连通正常 (耗时: {llm_cost})" if llm_ok else f"🔴 异常 ({llm_cost})"
+
+        # 2. 实时探测知乎 Cookie 状态
+        zc = cfg.get("zhihu", {})
+        cookie = zc.get("cookie", "")
+        cookie_desc = "⚪ 未配置"
+        if cookie:
+            try:
+                headers = {
+                    "accept": "*/*",
+                    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    "cookie": cookie
+                }
+                r = requests.get("https://www.zhihu.com/api/v4/me?include=is_realname", headers=headers, timeout=5)
+                if r.status_code == 200:
+                    u_name = r.json().get("name", "")
+                    cookie_desc = f"🟢 正常生效 (账号: {u_name or '已登录'})"
+                else:
+                    cookie_desc = f"🔴 凭据失效 (HTTP {r.status_code})"
+            except Exception as e:
+                cookie_desc = f"⚠️ 探测超时 ({str(e)[:30]})"
+
+        return f"""📊 **SocialRadar 当前运行状态看板**
 ━━━━━━━━━━━━━━━━━━
 🟢 **服务状态**: 守护监控中 (防反爬拟人抖动)
+🤖 **大模型引擎**: `{llm_model}` -> {llm_badge}
+🍪 **知乎抓取凭据**: {cookie_desc}
 🌙 **免打扰时段**: `{quiet_h}` ({quiet_desc})
 📅 **抓取回溯范围**: 最近 **{self.service.max_days_back}** 天内的动态/回答
 ⏰ **基础轮询周期**: 每 **{self.service.base_interval_minutes}** 分钟 (±{int(self.service.jitter_ratio*100)}% 随机抖动)
 🎯 **AI 价值阈值**: {self.service.min_value_score} 分及以上推送
-🤖 **大模型**: {cfg.get('llm', {}).get('model', 'gemini-3.8-flash')}
 🔍 **监控源**: 知乎 (关注人动态 + 关注问题最新回答)
-💬 **AI追问提示**: 发送 `/llm <问题>` 即可针对最新文章展开多轮深度探讨！"""
+
+💡 提示:
+• 发送 `/llm model` 可切换/测试其他模型
+• 发送 `/cookie <新Cookie>` 可热更知乎凭据"""
     def _cmd_chat_llm(self, llm_text: str, from_user: str) -> str:
         """处理针对社交雷达文章的 /llm 追问."""
         parts = llm_text.split(maxsplit=1)
@@ -145,6 +175,10 @@ class RadarCommandHandler:
             )
 
         first_token = parts[0].strip().lower()
+        if first_token in ("model", "models", "模型"):
+            model_arg = parts[1].strip() if len(parts) > 1 else ""
+            return self._cmd_llm_model(model_arg)
+
         if first_token in ("last", "latest") or (first_token.isalnum() and len(first_token) >= 8 and not any('\u4e00' <= c <= '\u9fff' for c in first_token)) or first_token.isdigit():
             target = first_token
             question = parts[1].strip() if len(parts) > 1 else ""
@@ -280,6 +314,56 @@ class RadarCommandHandler:
         self.service.evaluator.min_value_score = score
         self._update_yaml(["radar", "min_value_score"], score)
         return f"✅ **AI 价值推送阈值已修改**\n\n新阈值: **{score}** 分 (已持久化保存)。"
+    def _cmd_llm_model(self, model_arg: str) -> str:
+        """处理 /llm model 查看状态或切换大模型指令."""
+        # 1. 查询当前模型与状态
+        if not model_arg or model_arg.lower() in ("status", "check", "list", "状态"):
+            ok, cost_or_err = self.service.evaluator.test_model(self.service.evaluator.model)
+            status_badge = f"🟢 连通正常 (响应耗时: {cost_or_err})" if ok else f"🔴 异常 ({cost_or_err})"
+
+            return (
+                "🤖 **SocialRadar 大模型状态看板**\n"
+                "━━━━━━━━━━━━━━━━━━\n"
+                f"📌 当前主模型: `{self.service.evaluator.model}`\n"
+                f"⚡ 实时连通性: {status_badge}\n"
+                f"🌐 接口地址: `{self.service.evaluator.base_url}`\n\n"
+                "📋 **常用候选模型**:\n"
+                "• `gemini-3.1-pro-preview` (推荐：稳定、速度快)\n"
+                "• `gemini-3.6-flash`\n"
+                "• `gemini-3.8-flash`\n"
+                "• `deepseek-chat`\n\n"
+                "💡 **切换模型命令**:\n"
+                "发送：`/llm model <模型名称>`\n"
+                "例如：`/llm model gemini-3.1-pro-preview`"
+            )
+
+        # 2. 切换模型
+        target_model = model_arg.strip()
+        logger.info(f"[SocialRadar] 用户请求切换大模型至: {target_model}")
+
+        ok, cost_or_err = self.service.evaluator.test_model(target_model)
+        if ok:
+            old_model = self.service.evaluator.model
+            self.service.evaluator.model = target_model
+            self._update_yaml(["llm", "model"], target_model)
+            return (
+                "✅ **大模型切换成功！**\n"
+                "━━━━━━━━━━━━━━━━━━\n"
+                f"🔄 原模型: `{old_model}`\n"
+                f"🤖 新模型: `{target_model}`\n"
+                f"⚡ 连通性测试: 🟢 通过 (耗时: {cost_or_err})\n"
+                "💾 配置文件已持久化保存，后续雷达动态评估将自动使用该模型！"
+            )
+        else:
+            return (
+                "⚠️ **模型连通性测试失败！**\n"
+                "━━━━━━━━━━━━━━━━━━\n"
+                f"目标模型: `{target_model}`\n"
+                f"❌ 失败原因: {cost_or_err}\n\n"
+                f"🛡️ 为保障监控不中断，雷达仍保持当前可用模型: `{self.service.evaluator.model}`\n"
+                "💡 建议：发送 `/llm model` 查看可用候选模型列表。"
+            )
+
 
     def _cmd_update_cookie(self, new_cookie: str) -> str:
         if len(new_cookie) < 30 or "z_c0" not in new_cookie:
@@ -302,7 +386,19 @@ class RadarCommandHandler:
             r = requests.get(test_url, headers=headers, timeout=10)
             if r.status_code == 200:
                 name = r.json().get("name", "用户")
-                return f"🎉 **知乎 Cookie 热更新成功！**\n\n- 账号: `{name}` (HTTP 200 OK)\n- 雷达监控已恢复正常采集。"
+                # 跨项目同步更新 wechat_obsidian 的 config.yaml
+                for obs_path in ["../wechat_obsidian/config.yaml", "/root/wechat_obsidian/config.yaml"]:
+                    if os.path.exists(obs_path):
+                        try:
+                            with open(obs_path, "r", encoding="utf-8") as f:
+                                o_cfg = yaml.safe_load(f) or {}
+                            o_cfg.setdefault("zhihu", {})["cookie"] = new_cookie
+                            with open(obs_path, "w", encoding="utf-8") as f:
+                                yaml.dump(o_cfg, f, allow_unicode=True, sort_keys=False)
+                            logger.info(f"[SocialRadar] 同步热更新 {obs_path} 知乎 Cookie 成功！")
+                        except Exception as e:
+                            logger.warning(f"[SocialRadar] 同步更新 {obs_path} 异常: {e}")
+                return f"🎉 **知乎 Cookie 热更新成功！**\n\n- 账号: `{name}` (HTTP 200 OK)\n- 雷达与 Obsidian 助手均已同步更新凭据。"
             return f"⚠️ Cookie 已写入，但知乎服务端验证返回 HTTP {r.status_code}，可能触发了滑块验证码。"
         except Exception as e:
             return f"⚠️ Cookie 已保存，但验证异常: {e}"

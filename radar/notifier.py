@@ -14,10 +14,25 @@ class WeChatNotifier:
         self.agent_id = int(agent_id)
         self.corp_secret = corp_secret.strip()
         self.default_to_user = default_to_user.strip() or "@all"
+        self.alert_cooldowns: Dict[str, float] = {}
 
         self._access_token: Optional[str] = None
         self._token_expires_at: float = 0.0
 
+    def send_alert(self, alert_key: str, title: str, content: str, to_user: Optional[str] = None, cooldown_seconds: int = 300) -> bool:
+        """发送告警通知给用户，内置防刷屏冷却时间 (默认 5 分钟内同一类型告警仅发送一次)."""
+        now = time.time()
+        if not hasattr(self, "alert_cooldowns"):
+            self.alert_cooldowns = {}
+        last_time = self.alert_cooldowns.get(alert_key, 0.0)
+        if now - last_time < cooldown_seconds:
+            logger.debug(f"[Alert] 告警 [{alert_key}] 处于冷却中，跳过重复提醒")
+            return False
+
+        self.alert_cooldowns[alert_key] = now
+        full_text = f"{title}\n━━━━━━━━━━━━━━━━━━\n{content}"
+        logger.warning(f"[Alert] 触发微信用户告警: {title}")
+        return self.send_text(full_text, to_user=to_user)
     def get_access_token(self, force_refresh: bool = False) -> str:
         """获取 access_token 带本地过期缓存."""
         now = time.time()

@@ -22,8 +22,10 @@ class ZhihuMonitor(BaseMonitor):
         check_questions: bool = True,
         max_questions_per_round: int = 8,
         delay_range: tuple = (2.5, 6.0),
-        timeout: int = 15
+        timeout: int = 15,
+        notifier: Optional[Any] = None
     ):
+        self.notifier = notifier
         self.cookie = cookie.strip()
         self.user_token = user_token.strip()
         self.check_moments = check_moments
@@ -88,8 +90,18 @@ class ZhihuMonitor(BaseMonitor):
         self.session.headers["referer"] = "https://www.zhihu.com/follow"
 
         resp = self.session.get(url, timeout=self.timeout)
-        if resp.status_code == 403 or resp.status_code == 429:
-            logger.warning(f"[Zhihu] 触发限流或验证码 (HTTP {resp.status_code})")
+        if resp.status_code in (401, 403, 429):
+            logger.warning(f"[Zhihu] 触发限流或验证码或凭据失效 (HTTP {resp.status_code})")
+            if self.notifier:
+                self.notifier.send_alert(
+                    alert_key="social_radar_zhihu_cookie",
+                    title="🍪 【社交雷达 - 知乎凭据失效告警】",
+                    content=(
+                        f"⚠️ 状态: 知乎动态接口返回 HTTP {resp.status_code} (凭据已失效或触发反爬拦截)。\n"
+                        "雷达已暂停知乎内容抓取。\n"
+                        "💡 恢复: 电脑登录知乎复制 Cookie，在微信回复 `/cookie <新Cookie>` 即可热更新恢复采集！"
+                    )
+                )
             return []
         if resp.status_code != 200:
             logger.warning(f"[Zhihu] 动态接口异常 HTTP {resp.status_code}")
