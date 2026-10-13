@@ -1,5 +1,6 @@
 """微信交互指令处理器与动态配置热调中心 (SocialRadar)."""
 
+import os
 import re
 import yaml
 import requests
@@ -370,11 +371,13 @@ class RadarCommandHandler:
             return "⚠️ Cookie 格式似乎不完整，请完整复制网络请求中的 Cookie 标头。"
 
         self._update_yaml(["zhihu", "cookie"], new_cookie)
-        # 热更内存中的 session header
+        # 热更内存中的配置与 session header
+        if hasattr(self.service, "cfg") and isinstance(self.service.cfg, dict):
+            self.service.cfg.setdefault("zhihu", {})["cookie"] = new_cookie
         for m in self.service.monitors:
             if m.get_platform_name() == "zhihu":
+                m.cookie = new_cookie
                 m.session.headers["cookie"] = new_cookie
-
         # 探测有效性
         test_url = "https://www.zhihu.com/api/v4/me?include=is_realname"
         headers = {
@@ -404,8 +407,12 @@ class RadarCommandHandler:
             return f"⚠️ Cookie 已保存，但验证异常: {e}"
 
     def _update_yaml(self, keys: list, value: Any):
+        if hasattr(self.service, "cfg") and isinstance(self.service.cfg, dict):
+            cur_mem = self.service.cfg
+            for k in keys[:-1]:
+                cur_mem = cur_mem.setdefault(k, {})
+            cur_mem[keys[-1]] = value
         p = "config/config.yaml"
-        import os
         if not os.path.exists(p):
             return
         try:

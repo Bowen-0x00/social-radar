@@ -133,3 +133,35 @@ def test_model_switching_and_status(tmp_path):
     res_status = handler.handle_command("/status")
     assert "SocialRadar 当前运行状态看板" in res_status
     assert "good-model" in res_status
+
+
+def test_cookie_hot_update(monkeypatch, tmp_path):
+    """测试 /cookie 热更新与验证成功分支 (防止缺少 os 导入等异常)."""
+    import requests
+    from radar.command_handler import RadarCommandHandler
+
+    class MockResp:
+        status_code = 200
+        def json(self):
+            return {"name": "Bowen"}
+
+    monkeypatch.setattr(requests, "get", lambda *a, **kw: MockResp())
+
+    class MockMonitor:
+        cookie = "old"
+        class session:
+            headers = {"cookie": "old"}
+        def get_platform_name(self):
+            return "zhihu"
+
+    class MockService:
+        cfg = {"zhihu": {"cookie": "old"}}
+        monitors = [MockMonitor()]
+
+    handler = RadarCommandHandler(MockService())
+    new_cookie = "z_c0=2|1:0|10:1234567890|4:z_c0|80:abcdefghijklmnopqrst; d_c0=12345"
+    reply = handler.handle_command(f"/cookie {new_cookie}")
+    assert "知乎 Cookie 热更新成功" in reply
+    assert "Bowen" in reply
+    assert handler.service.cfg["zhihu"]["cookie"] == new_cookie
+    assert handler.service.monitors[0].session.headers["cookie"] == new_cookie
